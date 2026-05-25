@@ -1,0 +1,20 @@
+# Maven build output
+target/
+
+# YOUR PERSONAL CONFIG — contains API keys and home address — NEVER commit this
+config.properties
+
+# IDE project files
+.idea/
+*.iml
+.vscode/
+*.DS_Store
+
+# Compiled class files
+*.class
+
+# Debug files generated at runtime
+debug-*.png
+debug-*.html
+debug-api-response-*.json
+assignr-*.html

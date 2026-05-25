@@ -1,0 +1,73 @@
+# ══════════════════════════════════════════════════════════════════
+#  Assignr Filter — Configuration Template
+#
+#  HOW TO USE:
+#    1. Copy this file:  cp config.properties.example config.properties
+#    2. Fill in your values below
+#    3. NEVER commit config.properties to GitHub — it's in .gitignore
+# ══════════════════════════════════════════════════════════════════
+
+
+# ── Assignr Login Credentials ──────────────────────────────────────────────────
+#  Your normal Assignr email and password (same as logging in at app.assignr.com)
+assignr.email=you@example.com
+assignr.password=YOUR_PASSWORD_HERE
+
+
+# ── Browser Settings ───────────────────────────────────────────────────────────
+#  true  = headless (browser runs silently in background, faster)
+#  false = headed  (you can watch the browser — useful when selectors break)
+browser.headless=true
+
+
+# ── Your Home Location ─────────────────────────────────────────────────────────
+#  Used to calculate distance to each game venue.
+#  Find your lat/lon at: https://www.latlong.net  (type your address)
+#  Example below is approximate Northern Virginia / DC area
+home.latitude=38.9072
+home.longitude=-77.0369
+
+
+# ── Filter Settings ────────────────────────────────────────────────────────────
+
+# Minimum pay per game in dollars — games paying less will be ignored
+filter.min_pay=80.0
+
+# Maximum distance in miles (straight-line — not driving distance)
+filter.max_distance_miles=25.0
+
+# Preferred leagues (comma-separated, case-insensitive) — get a scoring bonus
+filter.preferred_leagues=VHSL,ECNL,NCAA
+
+# Preferred game levels — get a scoring bonus
+# Common values: varsity, jv, freshman, collegiate, middle school
+filter.preferred_levels=varsity,collegiate
+
+# Schools/teams you prefer (optional bonus points, comma-separated)
+filter.preferred_schools=
+
+# Schools/teams to ALWAYS exclude (partial match, comma-separated)
+# Example: filter.blacklisted_schools=Springfield,Marshall
+filter.blacklisted_schools=
+
+# Fields/venues to ALWAYS exclude (partial match, comma-separated)
+filter.blacklisted_fields=
+
+# Days you are available (full English names, comma-separated)
+filter.available_days=Saturday,Sunday
+
+# Your available time window (24-hour HH:MM format)
+filter.earliest_time=08:00
+filter.latest_time=20:00
+
+
+# ── Scoring Weights ────────────────────────────────────────────────────────────
+#  score = (pay × pay_weight) - (distance × distance_weight) + bonuses
+#
+#  Raise pay_weight to 2.0 to prioritize higher-paying games.
+#  Raise distance_weight to 1.0 to penalize farther games more heavily.
+
+score.pay_weight=1.0
+score.distance_weight=0.5
+score.varsity_bonus=15.0
+score.collegiate_bonus=20.0
