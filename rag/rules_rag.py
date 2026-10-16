@@ -60,7 +60,8 @@ Question: {question}"""
 
 
 def get_llm() -> ChatAnthropic:
-    return ChatAnthropic(model=config.LLM_MODEL, temperature=0)
+    # Note: newer Claude models reject non-default temperature, so it is left at the default
+    return ChatAnthropic(model=config.LLM_MODEL)
 
 
 def load_vectorstore() -> Chroma:
