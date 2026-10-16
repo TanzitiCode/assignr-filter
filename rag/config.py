@@ -31,6 +31,7 @@ LEAGUE_NAMES = {
     "UPSL": "United Premier Soccer League (adult)",
     "UPSL-Academy": "UPSL Academy (youth)",
     "USCCS": "US College Club Soccer (college club)",
+    "VHSL": "Virginia High School League (high school; NFHS rules, not IFAB)",
 }
 
 # Where the vector index is saved (rebuilt by ingest.py)

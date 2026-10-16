@@ -27,6 +27,8 @@ rag/docs/**/*.pdf
 rag/docs/**/*.txt
 rag/docs/**/*.md
 !rag/docs/README.md
+# ...but our own quick-reference summaries are fine to commit
+!rag/docs/leagues/*/_quick-reference-*.md
 __pycache__/
 
 # Scraped assignments exported for the Python RAG assistant — contains venue addresses

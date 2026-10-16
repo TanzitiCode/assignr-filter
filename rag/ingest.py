@@ -11,6 +11,7 @@ filter by league later:
     file:        file name
     page:        page number (PDFs only, 1-based)
 """
+import logging
 import shutil
 import sys
 from pathlib import Path
@@ -22,6 +23,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import config
 from embeddings import get_embeddings
+
+# pypdf warns about fonts it can't fully decode (e.g. in the IFAB PDF); the text still extracts fine
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 
 def load_file(path: Path) -> list[Document]:

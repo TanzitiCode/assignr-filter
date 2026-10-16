@@ -11,6 +11,7 @@ Flow:
   4. The top chunks go to the LLM, which answers using only those chunks.
 """
 import re
+from itertools import zip_longest
 from typing import Optional
 
 from langchain_anthropic import ChatAnthropic
@@ -29,6 +30,9 @@ Rules for answering:
 - Cite every rule you use like [file p.N]. If the context doesn't contain the answer, say so plainly — never guess.
 - League rules can modify the Laws of the Game (e.g. game length, substitutions, heading restrictions).
   If a league rule and the Laws differ, give the league rule for that league and say it differs from the Laws.
+- Some competitions don't use the Laws of the Game at all (e.g. VHSL high school games use NFHS rules). If the
+  league's documents say so, answer from those rules and use the Laws only for comparison.
+- Rules often differ by age group. If the answer depends on the age group and none was given, list each age group.
 - If the answer depends on the league and no league was given, say what it depends on.
 - Be concise: the decision first (e.g. the sanction and restart), then the reasoning.
 
@@ -93,9 +97,14 @@ def generate_queries(question: str, llm: BaseChatModel) -> list[str]:
 def search(store: Chroma, query: str, league: Optional[str]) -> list[Document]:
     """Search the Laws plus (if given) that one league's rules. No league -> search everything."""
     search_filter = None
-    if league:
-        search_filter = {"$or": [{"source_type": "laws"}, {"league": league}]}
-    return store.similarity_search(query, k=config.TOP_K, filter=search_filter)
+    if not league:
+        return store.similarity_search(query, k=config.TOP_K)
+    # Search the league and the Laws SEPARATELY, then interleave (league #1, Laws #1, league #2, ...).
+    # In one combined search the 400+ chunk Laws book crowds out a league's few pages of modifications.
+    league_docs = store.similarity_search(query, k=config.TOP_K, filter={"league": league})
+    laws_docs = store.similarity_search(query, k=config.TOP_K, filter={"source_type": "laws"})
+    mixed = [d for pair in zip_longest(league_docs, laws_docs) for d in pair if d is not None]
+    return mixed[: config.TOP_K]
 
 
 # ── Step 3: RAG Fusion ─────────────────────────────────────────────────────────
