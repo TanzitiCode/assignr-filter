@@ -8,11 +8,12 @@ docs/
   laws/                  IFAB Laws of the Game, plus any federation memos / Q&As
   leagues/
     CSOA/  NAL/  MLS-NEXT/  ECNL/  NCSL/  UPSL/  UPSL-Academy/
-    DCPL/  APSL/  APL/  College-Club/
+    DCPL/  APSL/  APL/  USCCS/
 ```
 
 - **Folder name = league name.** It's what you pass to `--league`, so keep it short.
-- **To add a league**, just create a new folder under `leagues/`.
+- **To add a league**, just create a new folder under `leagues/`. Optionally add its full name to
+  `LEAGUE_NAMES` in `config.py` so questions using the full name find it.
 - **Rules on a web page, not a PDF?** Save it as PDF from the browser (File → Print → Save as PDF),
   or paste the text into a `.md` file.
 - **Use the current season's documents** and delete old ones. Leagues change rules yearly,

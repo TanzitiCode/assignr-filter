@@ -22,6 +22,11 @@ assignr-*.html
 # Python RAG assistant: virtualenv, caches, and the generated vector index (rebuild with ingest.py)
 rag/.venv/
 rag/index/
+# Rule documents stay local (rulebooks are usually copyrighted); keep the folder READMEs and .gitkeep files
+rag/docs/**/*.pdf
+rag/docs/**/*.txt
+rag/docs/**/*.md
+!rag/docs/README.md
 __pycache__/
 
 # Scraped assignments exported for the Python RAG assistant — contains venue addresses

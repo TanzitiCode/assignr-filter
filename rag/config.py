@@ -16,6 +16,23 @@ DOCS_DIR = RAG_DIR / "docs"
 LAWS_DIR = DOCS_DIR / "laws"
 LEAGUES_DIR = DOCS_DIR / "leagues"
 
+# Full names for league folders. The router uses these to match questions like
+# "college club" -> USCCS, and to tell similar names apart (APL vs APSL).
+# Folders not listed here still work; they just match on the folder name only.
+LEAGUE_NAMES = {
+    "APL": "American Premier League (adult; Premier and Championship divisions)",
+    "APSL": "American Premier Soccer League (adult, USASA)",
+    "CSOA": "Commonwealth Soccer Officials Association (referee association: assigning policies and procedures)",
+    "DCPL": "DCPL",
+    "ECNL": "Elite Clubs National League (youth)",
+    "MLS-NEXT": "MLS NEXT (youth academy)",
+    "NAL": "National Academy League (youth)",
+    "NCSL": "National Capital Soccer League (youth)",
+    "UPSL": "United Premier Soccer League (adult)",
+    "UPSL-Academy": "UPSL Academy (youth)",
+    "USCCS": "US College Club Soccer (college club)",
+}
+
 # Where the vector index is saved (rebuilt by ingest.py)
 INDEX_DIR = RAG_DIR / "index"
 COLLECTION_NAME = "referee_docs"

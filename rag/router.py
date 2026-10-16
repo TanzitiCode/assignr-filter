@@ -21,6 +21,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+import config
+
 
 class Route(BaseModel):
     destination: Literal["rules", "assignments", "general"] = Field(
@@ -42,9 +44,10 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 - general: refereeing questions a rulebook doesn't answer (handling coaches, fitness, positioning tips,
   career/upgrade advice) and anything else.
 
-Known leagues: {leagues}
-If the question names one of these leagues (or an obvious variant, e.g. "MLS Next" for "MLS-NEXT"),
-return it exactly as spelled in the list. Otherwise return null."""),
+Known leagues (short name: full name):
+{leagues}
+If the question names or clearly refers to one of these leagues (by short name, full name, or an obvious variant,
+e.g. "MLS Next" for "MLS-NEXT", "college club" for "USCCS"), return its SHORT name exactly as spelled. Otherwise return null."""),
     ("human", "{question}"),
 ])
 
@@ -52,7 +55,8 @@ return it exactly as spelled in the list. Otherwise return null."""),
 def route_question(question: str, leagues: list[str], llm: BaseChatModel) -> Route:
     # json_schema = Claude's native structured outputs (forced tool calling isn't supported on newer models)
     router = ROUTER_PROMPT | llm.with_structured_output(Route, method="json_schema")
-    raw = router.invoke({"question": question, "leagues": ", ".join(leagues) or "none"})
+    listing = "\n".join(f"- {lg}: {config.LEAGUE_NAMES.get(lg, lg)}" for lg in leagues) or "none"
+    raw = router.invoke({"question": question, "leagues": listing})
     return normalize(raw, leagues)
 
 
@@ -61,5 +65,10 @@ def normalize(route: Route, leagues: list[str]) -> Route:
     if not route.league:
         return route
     simplify = lambda s: "".join(ch for ch in s.lower() if ch.isalnum())
-    match = next((lg for lg in leagues if simplify(lg) == simplify(route.league)), None)
+    wanted = simplify(route.league)
+
+    def full_name(lg):  # "US College Club Soccer (college club)" -> "US College Club Soccer"
+        return config.LEAGUE_NAMES.get(lg, lg).split("(")[0]
+
+    match = next((lg for lg in leagues if wanted in (simplify(lg), simplify(full_name(lg)))), None)
     return route.model_copy(update={"league": match})
