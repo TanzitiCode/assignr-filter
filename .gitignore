@@ -4,6 +4,11 @@ target/
 # YOUR PERSONAL CONFIG — contains API keys and home address — NEVER commit this
 config.properties
 
+# Saved Assignr login session (cookies) — as sensitive as your password
+.assignr-session.json
+# Your Assignr payment history (cached statements) — personal financial data
+pay-history.json
+
 # IDE project files
 .idea/
 *.iml

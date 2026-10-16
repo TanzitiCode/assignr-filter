@@ -2,6 +2,8 @@ package model;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Represents a single referee assignment from the Assignr API.
@@ -29,6 +31,15 @@ public class Assignment {
     private String position;    // "Referee", "AR1", "AR2"
     private LocalDateTime gameTime;
     private boolean accepted;
+
+    private String assignrName;  // Assignr org subdomain (e.g. "nova") — set by scraper
+    private int venuePopupId = -1; // Assignr venue ID for coordinate lookup — transient, not from API
+
+    // Assignors rarely publish fees on open games, so pay is usually 0 (unknown). These are
+    // ESTIMATES from your own past payments at this site, per open position kind:
+    // e.g. {"center": 72.5, "AR": 51.0}. Set by AssignrScraper using PayHistory.
+    private Map<String, Double> payEstimates = new TreeMap<>();
+    private int payEstimateGames; // how many of your past paid games the estimate is based on
 
     // These two fields are NOT from the API — we calculate them ourselves:
     private double distanceMiles; // calculated using Haversine formula
@@ -82,6 +93,18 @@ public class Assignment {
 
     public boolean isAccepted() { return accepted; }
     public void setAccepted(boolean accepted) { this.accepted = accepted; }
+
+    public String getAssignrName() { return assignrName != null ? assignrName : ""; }
+    public void setAssignrName(String assignrName) { this.assignrName = assignrName; }
+
+    public int getVenuePopupId() { return venuePopupId; }
+    public void setVenuePopupId(int venuePopupId) { this.venuePopupId = venuePopupId; }
+
+    public Map<String, Double> getPayEstimates() { return payEstimates; }
+    public void setPayEstimates(Map<String, Double> payEstimates) { this.payEstimates = payEstimates; }
+
+    public int getPayEstimateGames() { return payEstimateGames; }
+    public void setPayEstimateGames(int payEstimateGames) { this.payEstimateGames = payEstimateGames; }
 
     public double getDistanceMiles() { return distanceMiles; }
     public void setDistanceMiles(double distanceMiles) { this.distanceMiles = distanceMiles; }

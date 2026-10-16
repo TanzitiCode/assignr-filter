@@ -77,6 +77,7 @@ public class Main {
         }
 
         if (assignments.isEmpty()) {
+            exportJson(assignments); // an empty file means "no open games", so the assistant doesn't use stale data
             System.out.println("No available assignments found.");
             return;
         }
@@ -156,6 +157,7 @@ public class Main {
         for (int i = 0; i < limit; i++) {
             Assignment a = ranked.get(i);
             System.out.printf("  %2d. %s%n", i + 1, a);
+            System.out.printf("      Assignr:  %s%n", a.getAssignrName());
             System.out.printf("      Venue:    %s%n", a.getVenueName());
             System.out.printf("      Address:  %s%n", a.getVenueAddress());
             System.out.printf("      Position: %s%n", a.getPosition());

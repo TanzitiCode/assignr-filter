@@ -47,8 +47,11 @@ public class AssignmentScorer {
         // Score each assignment
         assignments.forEach(this::computeScore);
 
-        // Sort descending by score (reversed because Comparator.comparingDouble sorts ascending)
-        assignments.sort(Comparator.comparingDouble(Assignment::getScore).reversed());
+        // Sort descending by score; push unknown-location games to the bottom
+        assignments.sort(
+            Comparator.comparingInt((Assignment a) -> a.getVenuePopupId() <= 0 ? 1 : 0)
+                .thenComparing(Comparator.comparingDouble(Assignment::getScore).reversed())
+        );
 
         return assignments;
     }

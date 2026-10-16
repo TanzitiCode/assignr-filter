@@ -6,6 +6,7 @@ import model.Assignment;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -68,15 +69,27 @@ public class AssignrScraper {
     public static boolean DEBUG_SCREENSHOTS = false;
     public static boolean DUMP_PAGE_HTML    = false;
 
+    // ── Saved login session ───────────────────────────────────────────────────
+    // After a successful login (including any verification code), the browser's cookies are saved
+    // here so later runs skip the login + code. Contains login cookies: kept out of git, owner-only.
+    // Delete this file to force a fresh login.
+    private static final Path SESSION_FILE = Paths.get(".assignr-session.json");
+    // How long to wait for you to enter Assignr's verification code in the browser window
+    private static final int VERIFY_TIMEOUT_MINUTES = 5;
+
     // ─────────────────────────────────────────────────────────────────────────
 
     private final String  email;
     private final String  password;
     private final boolean headless;
 
-    private Playwright playwright;
-    private Browser    browser;
-    private Page       page;
+    private Playwright     playwright;
+    private Browser        browser;
+    private BrowserContext context;
+    private Page           page;
+
+    // Site display names by subdomain, e.g. "dcreferees" -> "DC Referees" (for matching pay statements)
+    private final Map<String, String> siteNames = new HashMap<>();
 
     public AssignrScraper(String email, String password, boolean headless) {
         this.email    = email;
@@ -88,8 +101,19 @@ public class AssignrScraper {
 
     public List<Assignment> scrapeAvailableAssignments() {
         try {
-            setup();
-            login();
+            setup(headless);
+            if (!login()) {
+                // Assignr wants a verification code. A headless browser can't show you the page,
+                // so reopen a visible one and log in again there.
+                if (headless) {
+                    System.out.println("Assignr is asking for a verification code — opening a browser window so you can enter it...");
+                    teardown();
+                    setup(false);
+                    if (login()) { saveSession(); return scrapeAllOrgs(); }
+                }
+                waitForVerification();
+            }
+            saveSession();
             return scrapeAllOrgs();
         } finally {
             teardown();
@@ -98,14 +122,14 @@ public class AssignrScraper {
 
     // ── Browser lifecycle ─────────────────────────────────────────────────────
 
-    private void setup() {
-        System.out.println("Launching " + (headless ? "headless" : "visible") + " browser...");
+    private void setup(boolean runHeadless) {
+        System.out.println("Launching " + (runHeadless ? "headless" : "visible") + " browser...");
         playwright = Playwright.create();
 
         browser = playwright.chromium().launch(
             new BrowserType.LaunchOptions()
-                .setHeadless(headless)
-                .setSlowMo(headless ? 0 : 80)
+                .setHeadless(runHeadless)
+                .setSlowMo(runHeadless ? 0 : 80)
                 .setArgs(Arrays.asList(
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
@@ -114,21 +138,30 @@ public class AssignrScraper {
                 ))
         );
 
-        BrowserContext ctx = browser.newContext(
-            new Browser.NewContextOptions()
-                .setViewportSize(1400, 900)
-                .setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-                              "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                              "Chrome/124.0.0.0 Safari/537.36")
-                .setLocale("en-US")
-                .setTimezoneId("America/New_York")
-        );
+        Browser.NewContextOptions opts = new Browser.NewContextOptions()
+            .setViewportSize(1400, 900)
+            .setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+                          "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                          "Chrome/124.0.0.0 Safari/537.36")
+            .setLocale("en-US")
+            .setTimezoneId("America/New_York");
 
-        ctx.addInitScript(
+        // Reuse the saved session (cookies) from a previous successful login, if there is one
+        if (Files.exists(SESSION_FILE)) opts.setStorageStatePath(SESSION_FILE);
+        try {
+            context = browser.newContext(opts);
+        } catch (PlaywrightException e) {
+            // Corrupt/unreadable session file — discard it and start fresh
+            System.out.println("Saved session couldn't be loaded — logging in fresh.");
+            try { Files.deleteIfExists(SESSION_FILE); } catch (IOException ignored) {}
+            context = browser.newContext(opts.setStorageStatePath(null));
+        }
+
+        context.addInitScript(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         );
 
-        page = ctx.newPage();
+        page = context.newPage();
     }
 
     private void teardown() {
@@ -136,11 +169,38 @@ public class AssignrScraper {
         // NoClassDefFoundError for CloseOptions on certain JVM/version combos.
         try { if (browser    != null) browser.close();    } catch (Throwable ignored) {}
         try { if (playwright != null) playwright.close(); } catch (Throwable ignored) {}
+        browser = null; playwright = null; context = null; page = null;
     }
 
     // ── Login ─────────────────────────────────────────────────────────────────
 
-    private void login() {
+    /** True for Assignr's "enter the code we sent you" pages (e.g. /user_session/request_code). */
+    private static boolean isVerificationPage(String url) {
+        String u = url.toLowerCase(Locale.ENGLISH);
+        return u.contains("request_code") || u.contains("verif") || u.contains("two_factor") || u.contains("mfa");
+    }
+
+    private static boolean isLoginPage(String url) {
+        return url.contains("sign_in") || url.contains("login");
+    }
+
+    /**
+     * Logs in. Returns true when fully logged in, or false when Assignr is asking for a
+     * verification code (the caller then lets you enter it in a visible browser).
+     */
+    private boolean login() {
+        // 1. Try the saved session first — if it's still valid, no password or code needed
+        if (Files.exists(SESSION_FILE)) {
+            page.navigate(ORGS_URL);
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+            String url = page.url();
+            if (!isLoginPage(url) && !isVerificationPage(url)) {
+                System.out.println("Using saved Assignr session.");
+                return true;
+            }
+            System.out.println("Saved session expired — logging in again.");
+        }
+
         System.out.println("Navigating to login page...");
         page.navigate(LOGIN_URL);
         page.waitForLoadState(LoadState.DOMCONTENTLOADED);
@@ -167,7 +227,10 @@ public class AssignrScraper {
         screenshot("03-after-login");
 
         String url = page.url();
-        if (url.contains("sign_in") || url.contains("login")) {
+        if (isVerificationPage(url)) {
+            return false;
+        }
+        if (isLoginPage(url)) {
             String err = "";
             try {
                 err = (String) page.evaluate(
@@ -184,6 +247,53 @@ public class AssignrScraper {
         }
 
         System.out.println("Logged in. URL: " + url);
+        return true;
+    }
+
+    /**
+     * Waits while YOU complete Assignr's verification step in the visible browser window
+     * (request the code, then type in the code Assignr sends you). The scraper never reads
+     * or enters the code itself — it only watches for the page to move past verification.
+     */
+    private void waitForVerification() {
+        System.out.println();
+        System.out.println("┌──────────────────────────────────────────────────────────────┐");
+        System.out.println("│  ACTION NEEDED: Assignr sent (or will send) you a code.        │");
+        System.out.println("│  Complete the verification step in the browser window.         │");
+        System.out.printf ("│  Waiting up to %d minutes...                                    │%n", VERIFY_TIMEOUT_MINUTES);
+        System.out.println("└──────────────────────────────────────────────────────────────┘");
+
+        long deadline = System.currentTimeMillis() + VERIFY_TIMEOUT_MINUTES * 60_000L;
+        while (System.currentTimeMillis() < deadline) {
+            String url;
+            try {
+                page.waitForTimeout(2000);
+                url = page.url();
+            } catch (PlaywrightException e) {
+                throw new RuntimeException("The browser window was closed before verification finished.");
+            }
+            if (!isVerificationPage(url) && !isLoginPage(url)) {
+                page.waitForLoadState(LoadState.NETWORKIDLE);
+                System.out.println("Verification complete. URL: " + url);
+                return;
+            }
+        }
+        throw new RuntimeException(
+            "Timed out after " + VERIFY_TIMEOUT_MINUTES + " minutes waiting for the Assignr verification code.\n" +
+            "  Run again and enter the code in the browser window when it opens.");
+    }
+
+    /** Saves cookies so the next run can skip login + verification. Owner-only file permissions. */
+    private void saveSession() {
+        try {
+            context.storageState(new BrowserContext.StorageStateOptions().setPath(SESSION_FILE));
+            try {
+                Files.setPosixFilePermissions(SESSION_FILE, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException ignored) {} // non-POSIX file systems (Windows)
+        } catch (Exception e) {
+            // Not fatal: you'll just be asked to log in (and maybe verify) again next time
+            System.err.println("WARNING: Could not save Assignr session — " + e.getMessage());
+        }
     }
 
     // ── Scraping: all organizations ───────────────────────────────────────────
@@ -196,6 +306,7 @@ public class AssignrScraper {
 
         List<String> orgWelcomeUrls = extractOrgUrls();
         System.out.printf("Found %d organization(s).%n", orgWelcomeUrls.size());
+        readSiteNames();
 
         List<Assignment> all = new ArrayList<>();
         for (int i = 0; i < orgWelcomeUrls.size(); i++) {
@@ -214,7 +325,56 @@ public class AssignrScraper {
             }
         }
 
+        if (!orgWelcomeUrls.isEmpty()) addPayEstimates(all, orgWelcomeUrls.get(0).replaceFirst("/welcome.*", ""));
         return all;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void readSiteNames() {
+        try {
+            List<List<String>> rows = (List<List<String>>) page.evaluate(
+                "() => Array.from(document.querySelectorAll('table tbody tr'))" +
+                "        .map(tr => [ (tr.querySelector('td') || {}).innerText || '', (tr.querySelector('a.btn') || {}).href || '' ])" +
+                "        .filter(r => r[1].includes('.assignr.com'))"
+            );
+            for (List<String> r : rows) siteNames.put(subdomainOf(r.get(1)), r.get(0).trim());
+        } catch (Exception e) {
+            System.err.println("  Could not read site names: " + e.getMessage().split("\n")[0]);
+        }
+    }
+
+    private static String subdomainOf(String url) {
+        return url.replaceFirst("https://", "").replaceFirst("\\.assignr\\.com.*", "");
+    }
+
+    /**
+     * Assignors rarely publish fees on open games, so estimate them from YOUR past payments at the
+     * same site and position (see PayHistory). Games with a real published fee keep it.
+     */
+    private void addPayEstimates(List<Assignment> games, String anySiteBase) {
+        PayHistory history = PayHistory.load();
+        try {
+            history.update(page, anySiteBase);
+        } catch (Exception e) {
+            System.err.println("  Could not update pay history (using cached data): " + e.getMessage().split("\n")[0]);
+        }
+        int estimated = 0;
+        for (Assignment a : games) {
+            String site = siteNames.get(a.getAssignrName());
+            Map<String, Double> bySite = history.estimatesForSite(site);
+            Map<String, Double> forGame = new TreeMap<>();
+            for (String slot : a.getPosition().split(",")) {
+                String kind = PayHistory.positionKind(slot.trim());
+                if (bySite.containsKey(kind)) forGame.put(kind, bySite.get(kind));
+            }
+            if (!forGame.isEmpty()) {
+                a.setPayEstimates(forGame);
+                a.setPayEstimateGames(history.gamesForSite(site));
+                estimated++;
+            }
+        }
+        System.out.printf("Pay: %d game(s) with a published fee, %d with an estimate from your pay history.%n",
+            games.stream().filter(g -> g.getPay() > 0).count(), estimated);
     }
 
     @SuppressWarnings("unchecked")
@@ -286,12 +446,82 @@ public class AssignrScraper {
             saveApiResponses(apiResponses);
         }
 
-        // Tag each game with the org name if league is blank
+        // Fetch coordinates for each venue via popup API
+        if (!games.isEmpty()) enrichCoordinates(games);
+
+        // Real fees, when the assignor has published them (usually they haven't: $0.00)
+        if (!games.isEmpty()) applyPublishedFees(base, games);
+
+        // Tag each game with the org name
         for (Assignment a : games) {
+            a.setAssignrName(orgName);
             if (a.getLeague() == null || a.getLeague().isBlank()) a.setLeague(orgName);
         }
 
         return games;
+    }
+
+    /**
+     * Reads the "Games as CSV" export of the unassigned list (a plain GET, read-only) and copies any
+     * published fee onto the matching game (matched on Assignr's game id = the card's data-game-id).
+     */
+    private void applyPublishedFees(String base, List<Assignment> games) {
+        try {
+            APIResponse r = page.request().get(base + PATH_UNASSIGNED + ".csv?style=games");
+            if (r.status() != 200) return;
+            List<List<String>> rows = parseCsv(r.text());
+            if (rows.isEmpty()) return;
+            List<String> header = rows.get(0);
+            int idCol = header.indexOf("Assignr Database ID");
+            int actualCol = header.indexOf("Actual Fee"), defaultCol = header.indexOf("Default Fee");
+            if (idCol < 0 || (actualCol < 0 && defaultCol < 0)) return;
+
+            Map<Integer, Double> fees = new HashMap<>();
+            for (List<String> row : rows.subList(1, rows.size())) {
+                if (row.size() <= idCol) continue;
+                double actual  = actualCol  >= 0 && row.size() > actualCol  ? PayHistory.parseDollars(row.get(actualCol))  : 0;
+                double deflt   = defaultCol >= 0 && row.size() > defaultCol ? PayHistory.parseDollars(row.get(defaultCol)) : 0;
+                double fee = actual > 0 ? actual : deflt;
+                if (fee <= 0) continue;
+                try { fees.put(Integer.parseInt(row.get(idCol).trim()), fee); } catch (NumberFormatException ignored) {}
+            }
+            int applied = 0;
+            for (Assignment a : games) {
+                Double fee = fees.get(a.getId());
+                if (fee != null && a.getPay() <= 0) { a.setPay(fee); applied++; }
+            }
+            if (applied > 0) System.out.printf("  Published fees found for %d game(s).%n", applied);
+        } catch (Exception e) {
+            System.err.println("  Fee lookup skipped: " + e.getMessage().split("\n")[0]);
+        }
+    }
+
+    /** Minimal CSV parser: handles quoted fields with commas, doubled quotes, and newlines. */
+    static List<List<String>> parseCsv(String text) {
+        List<List<String>> rows = new ArrayList<>();
+        List<String> row = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (quoted) {
+                if (c == '"' && i + 1 < text.length() && text.charAt(i + 1) == '"') { field.append('"'); i++; }
+                else if (c == '"') quoted = false;
+                else field.append(c);
+            } else if (c == '"') {
+                quoted = true;
+            } else if (c == ',') {
+                row.add(field.toString()); field.setLength(0);
+            } else if (c == '\n' || c == '\r') {
+                if (c == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n') i++;
+                row.add(field.toString()); field.setLength(0);
+                rows.add(row); row = new ArrayList<>();
+            } else {
+                field.append(c);
+            }
+        }
+        if (field.length() > 0 || !row.isEmpty()) { row.add(field.toString()); rows.add(row); }
+        return rows;
     }
 
     private List<Assignment> tryUrl(String url, String label, String orgName, int orgIdx, int attempt) {
@@ -424,6 +654,12 @@ public class AssignrScraper {
     private Assignment parseRow(ElementHandle row) {
         Assignment a = new Assignment();
 
+        // Assignr's game id (matches "Assignr Database ID" in the CSV export, used for fee lookup)
+        String gameId = row.getAttribute("data-game-id");
+        if (gameId != null) {
+            try { a.setId(Integer.parseInt(gameId.trim())); } catch (NumberFormatException ignored) {}
+        }
+
         // Date + time from data attributes on the outer card div
         String dateAttr = row.getAttribute("data-date");        // "May 26 2026"
         String descAttr = row.getAttribute("data-description"); // "Tue 6:00 PM @ Lightridge HS"
@@ -438,11 +674,16 @@ public class AssignrScraper {
             ));
         }
 
-        // Venue: try link first (has coordinates on the map popup), then plain-text fallback.
+        // Venue: try link first (contains venue ID for coordinate lookup), then plain-text fallback.
         // Some orgs don't link the venue, so we also check .venue-name and col-md-5 h4.
         ElementHandle venueLink = row.querySelector("a[href*='venue_maps']");
         if (venueLink != null) {
             a.setVenueName(venueLink.innerText().trim());
+            String href = venueLink.getAttribute("href");
+            if (href != null) {
+                Matcher idMatcher = Pattern.compile("id=(\\d+)").matcher(href);
+                if (idMatcher.find()) a.setVenuePopupId(Integer.parseInt(idMatcher.group(1)));
+            }
         } else {
             ElementHandle venueSpan = row.querySelector(".venue-name");
             if (venueSpan != null) {
@@ -485,7 +726,8 @@ public class AssignrScraper {
         // Open referee positions (fa-circle-dashed icon = slot is open)
         a.setPosition(extractOpenPositions(row));
 
-        // Pay is not shown on the "All Unassigned Games" page (you haven't been assigned yet).
+        // Pay is not shown on the "All Unassigned Games" page. A published fee (rare) is filled in later
+        // by applyPublishedFees(), and an estimate from your pay history by addPayEstimates().
         // pay=0 is treated as "unknown" by the filter — it won't be rejected by the pay filter.
         a.setPay(0.0);
 
@@ -518,6 +760,51 @@ public class AssignrScraper {
         if (lower.contains("middle"))    return "middle school";
         String[] parts = info.split(",");
         return parts.length >= 3 ? parts[2].trim() : "";
+    }
+
+    /**
+     * Fetches each venue's popup URL (once per unique ID) and extracts lat/lon from
+     * the embedded Google Maps LatLng constructor: new google.maps.LatLng(lat, lng)
+     */
+    private void enrichCoordinates(List<Assignment> games) {
+        Pattern latLngPat = Pattern.compile(
+            "google\\.maps\\.LatLng\\(([\\-\\d.]+),\\s*([\\-\\d.]+)\\)"
+        );
+        Map<Integer, double[]> cache = new HashMap<>();
+
+        for (Assignment a : games) {
+            int id = a.getVenuePopupId();
+            if (id <= 0) continue;
+
+            if (!cache.containsKey(id)) {
+                try {
+                    String popup = (String) page.evaluate(
+                        "(url) => fetch(url).then(r => r.text())",
+                        "/venue_maps/popup?id=" + id
+                    );
+                    Matcher m = latLngPat.matcher(popup != null ? popup : "");
+                    if (m.find()) {
+                        cache.put(id, new double[]{
+                            Double.parseDouble(m.group(1)),
+                            Double.parseDouble(m.group(2))
+                        });
+                    } else {
+                        cache.put(id, null); // mark as fetched but no coords found
+                    }
+                } catch (Exception ignored) {
+                    cache.put(id, null);
+                }
+            }
+
+            double[] coords = cache.get(id);
+            if (coords != null) {
+                a.setLatitude(coords[0]);
+                a.setLongitude(coords[1]);
+            }
+        }
+
+        long withCoords = games.stream().filter(a -> a.getLatitude() != 0.0 || a.getLongitude() != 0.0).count();
+        System.out.printf("  Coordinates: %d/%d venues resolved.%n", withCoords, games.size());
     }
 
     /** Returns a comma list of positions with open (fa-circle-dashed) slots. */
