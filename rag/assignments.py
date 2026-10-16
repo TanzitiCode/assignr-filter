@@ -82,8 +82,22 @@ def load_games() -> GameData:
         raise FileNotFoundError(
             f"{path.name} not found. Run the Java scraper first (java -jar target/assignr-filter-1.0-SNAPSHOT.jar).")
     with open(path, encoding="utf-8") as f:
-        games = json.load(f)
+        games = [clean(g) for g in json.load(f)]
     return GameData(games, datetime.fromtimestamp(path.stat().st_mtime))
+
+
+def clean(g: dict) -> dict:
+    """The scraper sometimes captures extra lines, e.g. league = "DC SCORES\\nAssignor: Jonathan Loney".
+    Keep the first line for league/level, and move the assignor name into its own field."""
+    g = dict(g)
+    for key in ("league", "gameLevel"):
+        value = g.get(key) or ""
+        first, *rest = value.split("\n")
+        g[key] = first.strip()
+        for line in rest:
+            if line.lower().strip().startswith("assignor:") and not g.get("assignor"):
+                g["assignor"] = line.split(":", 1)[1].strip()
+    return g
 
 
 def distinct(games: list[dict], key: str) -> list[str]:
@@ -156,7 +170,7 @@ def matches(g: dict, q: GameQuery) -> bool:
     if q.max_distance_miles is not None and g.get("distanceMiles") and g["distanceMiles"] > q.max_distance_miles:
         return False
 
-    if q.leagues and not any(simplify(lg) in simplify(g.get("league")) for lg in q.leagues):
+    if q.leagues and not any(simplify(lg) in simplify(f"{g.get('league')} {g.get('gameLevel')}") for lg in q.leagues):
         return False
     if q.levels and not any(simplify(lv) in simplify(g.get("gameLevel")) for lv in q.levels):
         return False
@@ -166,7 +180,8 @@ def matches(g: dict, q: GameQuery) -> bool:
             return False
     if q.keyword:
         haystack = simplify(" ".join(str(g.get(k) or "") for k in
-                                     ("homeTeam", "awayTeam", "venueName", "venueAddress", "league", "assignrName")))
+                                     ("homeTeam", "awayTeam", "venueName", "venueAddress", "league",
+                                      "gameLevel", "assignrName", "assignor")))
         if simplify(q.keyword) not in haystack:
             return False
     return True
