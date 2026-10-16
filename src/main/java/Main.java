@@ -4,6 +4,7 @@ import filter.AssignmentFilter;
 import model.Assignment;
 import ranking.AssignmentScorer;
 import util.DistanceCalculator;
+import util.JsonExporter;
 
 import java.io.IOException;
 import java.util.List;
@@ -33,6 +34,7 @@ public class Main {
 
     private static final String CONFIG_FILE = "config.properties";
     private static final int    TOP_N       = 10; // How many top matches to display
+    private static final String EXPORT_FILE = "assignments.json"; // Read by the Python RAG assistant (rag/)
 
     public static void main(String[] args) {
         printHeader();
@@ -106,6 +108,7 @@ public class Main {
         List<Assignment> filtered = filter.filter(assignments);
 
         if (filtered.isEmpty()) {
+            exportJson(assignments);
             System.out.println("\nNo assignments match your current preferences.");
             System.out.println("Try relaxing your filters in config.properties (lower min_pay or raise max_distance).");
             return;
@@ -115,8 +118,23 @@ public class Main {
         AssignmentScorer scorer = new AssignmentScorer(prefs);
         List<Assignment> ranked = scorer.scoreAndRank(filtered);
 
-        // ── Step 7: Display results ───────────────────────────────────────
+        // ── Step 7: Export to JSON for the Python RAG assistant ───────────
+        // Exports ALL scraped games (not just filtered ones) so the assistant can answer
+        // questions outside your config.properties filters. Games that were filtered out have score 0.
+        exportJson(assignments);
+
+        // ── Step 8: Display results ───────────────────────────────────────
         displayResults(ranked, TOP_N, prefs);
+    }
+
+    private static void exportJson(List<Assignment> assignments) {
+        try {
+            JsonExporter.export(assignments, EXPORT_FILE);
+            System.out.printf("Exported %d assignments to %s%n", assignments.size(), EXPORT_FILE);
+        } catch (IOException e) {
+            // Not fatal — the console output still works without the JSON file
+            System.err.println("WARNING: Could not write " + EXPORT_FILE + " — " + e.getMessage());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

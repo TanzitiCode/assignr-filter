@@ -18,3 +18,11 @@ debug-*.png
 debug-*.html
 debug-api-response-*.json
 assignr-*.html
+
+# Python RAG assistant: virtualenv, caches, and the generated vector index (rebuild with ingest.py)
+rag/.venv/
+rag/index/
+__pycache__/
+
+# Scraped assignments exported for the Python RAG assistant — contains venue addresses
+assignments.json
