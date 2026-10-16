@@ -10,6 +10,10 @@ a structured filter, then run it against assignments.json (written by the Java s
 
 Like the Java filter, pay = 0 and distance = 0 mean "unknown", and those games are kept
 (and labeled) rather than silently dropped.
+
+Pay: assignors rarely publish fees on open games, so most games carry `payEstimates` instead —
+the referee's own average past pay at that site per position, e.g. {"center": 72.5, "AR": 51.0}
+(built by the Java scraper from Payments Received). A published fee always wins over an estimate.
 """
 import json
 from dataclasses import dataclass
@@ -58,7 +62,8 @@ Levels that appear in the data: {levels}"""),
 ANSWER_PROMPT = ChatPromptTemplate.from_template(
     """You are helping a soccer referee pick games. Answer their question using ONLY the games listed below.
 Be brief. Refer to games by their # number. If no games are listed, say nothing matched and suggest which filter to relax.
-"pay ?" or "dist ?" means unknown — mention that if it matters for the recommendation.
+"$NN" is a fee the assignor published. "~$NN est" is an ESTIMATE from the referee's own past pay at that
+site for that position (say it's an estimate). "pay ?" or "dist ?" means unknown — mention that if it matters.
 
 Filters applied: {filters}
 Games ({count} shown{more}):
@@ -145,6 +150,16 @@ def parse_time(s: Optional[str]) -> Optional[time]:
         return None
 
 
+def effective_pay(g: dict, positions: Optional[list[str]] = None) -> tuple[Optional[float], bool]:
+    """(amount, is_estimate). A published fee wins; otherwise the best estimate among the open
+    positions the question asks about (or all open positions). (None, False) when unknown."""
+    if g.get("pay"):
+        return float(g["pay"]), False
+    est = g.get("payEstimates") or {}
+    wanted = [est[k] for k in (positions or est.keys()) if k in est]
+    return (max(wanted), True) if wanted else (None, False)
+
+
 def matches(g: dict, q: GameQuery) -> bool:
     t = game_time(g)
     d_from, d_to = parse_date(q.date_from), parse_date(q.date_to)
@@ -165,7 +180,8 @@ def matches(g: dict, q: GameQuery) -> bool:
         return False
 
     # Pay/distance: 0 means unknown -> keep (same rule as AssignmentFilter.java)
-    if q.min_pay is not None and g.get("pay") and g["pay"] < q.min_pay:
+    pay, _ = effective_pay(g, q.positions)
+    if q.min_pay is not None and pay is not None and pay < q.min_pay:
         return False
     if q.max_distance_miles is not None and g.get("distanceMiles") and g["distanceMiles"] > q.max_distance_miles:
         return False
@@ -187,11 +203,11 @@ def matches(g: dict, q: GameQuery) -> bool:
     return True
 
 
-def sort_games(games: list[dict], sort_by: str) -> list[dict]:
+def sort_games(games: list[dict], sort_by: str, positions: Optional[list[str]] = None) -> list[dict]:
     far_future = datetime.max
     keys = {
         "time": lambda g: game_time(g) or far_future,
-        "pay": lambda g: -(g.get("pay") or 0),
+        "pay": lambda g: -(effective_pay(g, positions)[0] or 0),
         "distance": lambda g: g.get("distanceMiles") or float("inf"),  # unknown distance last
         "score": lambda g: -(g.get("score") or 0),
     }
@@ -200,16 +216,29 @@ def sort_games(games: list[dict], sort_by: str) -> list[dict]:
 
 def run_query(games: list[dict], q: GameQuery) -> tuple[list[dict], int]:
     """Returns (games to show, total number that matched)."""
-    matched = sort_games([g for g in games if matches(g, q)], q.sort_by)
+    matched = sort_games([g for g in games if matches(g, q)], q.sort_by, q.positions)
     return matched[: max(1, q.limit)], len(matched)
 
 
 # ── Display ────────────────────────────────────────────────────────────────────
 
-def format_game(i: int, g: dict) -> str:
+def format_pay(g: dict, positions: Optional[list[str]] = None) -> str:
+    amount, estimated = effective_pay(g, positions)
+    if amount is None:
+        return "pay ?"
+    if not estimated:
+        return f"${amount:.0f}"
+    est = g.get("payEstimates") or {}
+    if len(est) > 1 and not positions:  # show each open position's estimate, e.g. "~R $72/AR $51 est"
+        label = {"center": "R", "AR": "AR", "4th": "4th"}
+        return "~" + "/".join(f"{label.get(k, k)} ${v:.0f}" for k, v in sorted(est.items())) + " est"
+    return f"~${amount:.0f} est"
+
+
+def format_game(i: int, g: dict, positions: Optional[list[str]] = None) -> str:
     t = game_time(g)
     when = t.strftime("%a %b %d %I:%M%p") if t else "time TBD"
-    pay = f"${g['pay']:.0f}" if g.get("pay") else "pay ?"
+    pay = format_pay(g, positions)
     dist = f"{g['distanceMiles']:.1f} mi" if g.get("distanceMiles") else "dist ?"
     return (f"#{i} {when} | {g.get('homeTeam') or '?'} vs {g.get('awayTeam') or '?'} | "
             f"{g.get('league') or '-'} {g.get('gameLevel') or ''} | {g.get('position') or '-'} | "
@@ -249,7 +278,7 @@ def answer(question: str, llm: BaseChatModel, data: Optional[GameData] = None) -
     data = data or load_games()
     q = build_query(question, data, llm)
     shown, total = run_query(data.games, q)
-    games_text = "\n".join(format_game(i + 1, g) for i, g in enumerate(shown)) or "(none)"
+    games_text = "\n".join(format_game(i + 1, g, q.positions) for i, g in enumerate(shown)) or "(none)"
     text = (ANSWER_PROMPT | llm | StrOutputParser()).invoke({
         "filters": describe(q),
         "count": len(shown),

@@ -56,7 +56,9 @@ def show_games(ga: assignments.GameAnswer):
     more = f" (showing {len(ga.games)} of {ga.total_matched})" if ga.total_matched > len(ga.games) else ""
     print(f"Games matched: {ga.total_matched}{more}")
     for i, g in enumerate(ga.games):
-        print("  " + assignments.format_game(i + 1, g))
+        print("  " + assignments.format_game(i + 1, g, ga.query.positions))
+    if any("est" in assignments.format_pay(g, ga.query.positions) for g in ga.games):
+        print("  (~$ est = average of your past pay at that site for that position)")
     age_h = (datetime.now() - ga.exported_at).total_seconds() / 3600
     stale = f"  ⚠ over {config.ASSIGNMENTS_STALE_HOURS}h old — re-run the scraper for current openings" \
         if age_h > config.ASSIGNMENTS_STALE_HOURS else ""
